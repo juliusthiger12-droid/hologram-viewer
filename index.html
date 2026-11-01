@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Hologram">
+<meta name="theme-color" content="#000000">
+<title>Hologram Viewer</title>
+<meta name="description" content="Turn any tablet or phone into a Pepper's ghost hologram. Play high-resolution hologram videos or your own videos, images and 3D models.">
+<style>
+  :root { --fg: #f2f2f0; --dim: #9a9a96; --line: rgba(255,255,255,.14); --glass: rgba(18,18,18,.72); }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  #stage { position: fixed; left: 50%; top: 50%; transform-origin: 50% 50%; transition: opacity .45s ease; }
+  #stage.fade { opacity: 0; }
+  #stage > * { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; }
+  #stage video, #stage img { object-fit: contain; background: #000; }
+  #stage .on { display: block; }
+
+  /* Bottom bar */
+  #ui { position: fixed; z-index: 10; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+    width: min(980px, calc(100% - 28px)); box-sizing: border-box; padding: 10px; border-radius: 16px;
+    background: var(--glass); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border: 1px solid var(--line);
+    transition: opacity .35s, transform .35s; }
+  #ui.hidden { opacity: 0; pointer-events: none; transform: translate(-50%, 12px); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .row + .row { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .spacer { flex: 1; }
+  button, label.btn { font: inherit; font-size: 14px; color: var(--fg); background: transparent; border: 1px solid transparent; border-radius: 10px;
+    padding: 8px 12px; cursor: pointer; white-space: nowrap; }
+  button:hover, label.btn:hover { background: rgba(255,255,255,.07); }
+  button:focus-visible, label.btn:focus-within, input:focus-visible, select:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+  button.on { background: rgba(255,255,255,.12); }
+  .primary { background: var(--fg); color: #000; font-weight: 600; }
+  .primary:hover { background: #fff; }
+  .group { display: flex; align-items: center; gap: 8px; color: var(--dim); font-size: 13px; padding: 0 6px; }
+  input[type=range] { width: 96px; accent-color: #fff; }
+  input[type=text] { font: inherit; color: var(--fg); background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; width: 140px; }
+  #now { color: var(--dim); font-size: 13px; padding: 0 6px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Gallery */
+  #gallery { position: fixed; z-index: 20; inset: 0; background: rgba(0,0,0,.9); display: none; overflow: auto;
+    padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 120px max(20px, env(safe-area-inset-left)); }
+  #gallery.show { display: block; }
+  #gallery .wrap { max-width: 980px; margin: 0 auto; }
+  #gallery h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  #gallery p.sub { color: var(--dim); margin: 0 0 20px; }
+  #gallery h2 { font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 26px 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .tile { position: relative; border-radius: 12px; overflow: hidden; background: #0b0b0b; border: 1px solid var(--line); cursor: pointer; aspect-ratio: 16 / 9; }
+  .tile img, .tile video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile span { position: absolute; left: 10px; bottom: 8px; font-size: 14px; font-weight: 500; text-shadow: 0 1px 6px #000; }
+  .tile.extra { display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--fg); }
+  .tile:hover { border-color: rgba(255,255,255,.4); }
+  #gallery .close { position: fixed; top: max(14px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); }
+
+  #hint { position: fixed; z-index: 9; top: max(14px, env(safe-area-inset-top)); left: 0; right: 0; text-align: center; color: #6b6b68; font-size: 13px; transition: opacity .35s; }
+  #hint.hidden { opacity: 0; }
+  #drop { position: fixed; z-index: 30; inset: 0; border: 2px dashed rgba(255,255,255,.6); display: none; align-items: center; justify-content: center; font-size: 20px; background: rgba(0,0,0,.6); }
+  #drop.show { display: flex; }
+  #help { position: fixed; z-index: 40; inset: 0; background: rgba(0,0,0,.95); display: none; overflow: auto; padding: 28px max(20px, env(safe-area-inset-left)); }
+  #help.show { display: block; }
+  #help div { max-width: 620px; margin: 0 auto; }
+  #help h1 { font-size: 22px; font-weight: 600; margin: 0 0 12px; }
+  #help h2 { font-size: 16px; font-weight: 600; margin: 22px 0 6px; }
+  #help p, #help li { color: #c4c4c0; }
+  @media (max-width: 560px) { input[type=range] { width: 74px; } #now { display: none; } }
+  @media (prefers-reduced-motion: reduce) { #stage, #ui { transition: none; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <canvas id="c2d"></canvas>
+  <video id="vid" playsinline muted preload="auto"></video>
+  <img id="img" alt="">
+</div>
+
+<div id="hint">Tap anywhere for controls</div>
+<div id="drop">Drop videos, images or a .glb model</div>
+
+<div id="ui">
+  <div class="row">
+    <button id="openGallery" class="primary">Videos</button>
+    <label class="btn" for="file">Open your files<input id="file" type="file" accept="video/*,image/*,.glb,model/gltf-binary" multiple hidden></label>
+    <button id="prev" aria-label="Previous">‹</button>
+    <button id="play" aria-label="Play or pause">Pause</button>
+    <button id="next" aria-label="Next">›</button>
+    <span id="now"></span>
+    <span class="spacer"></span>
+    <button id="mirror">Mirror: up–down</button>
+    <button id="rotate">Rotate 0°</button>
+    <button id="hide">Hide</button>
+  </div>
+  <div class="row">
+    <span class="group">Size <input id="size" type="range" min="0.3" max="1.6" step="0.01" value="1" aria-label="Size"></span>
+    <span class="group">Brightness <input id="bright" type="range" min="0.4" max="1.8" step="0.01" value="1" aria-label="Brightness"></span>
+    <span class="group">Darken background <input id="black" type="range" min="1" max="2.5" step="0.01" value="1" aria-label="Darken background"></span>
+    <button id="style" hidden>Model: real colours</button>
+    <input id="text" type="text" value="HELLO" maxlength="28" aria-label="Text to show" hidden>
+    <span class="spacer"></span>
+    <button id="sound">Sound off</button>
+    <button id="full">Fullscreen</button>
+    <button id="helpbtn">Help</button>
+  </div>
+</div>
+
+<div id="gallery" role="dialog" aria-label="Videos">
+  <div class="wrap">
+    <h1>Hologram videos</h1>
+    <p class="sub">Tap a video to play it. Your own files stay on your device.</p>
+    <div id="tiles" class="grid"></div>
+    <h2>Extras</h2>
+    <div class="grid">
+      <div class="tile extra" data-extra="clock">Clock</div>
+      <div class="tile extra" data-extra="text">Your text</div>
+      <label class="tile extra" for="file">Open your own files…</label>
+    </div>
+  </div>
+  <button class="close" id="closeGallery">Close</button>
+</div>
+
+<div id="help" role="dialog" aria-label="Help">
+  <div>
+    <h1>Hologram Viewer</h1>
+    <p>Plays anything as a Pepper's ghost hologram. Lay your tablet or phone flat under a sheet of clear acrylic at 45° (or in a hologram stand) and look through the sheet.</p>
+    <h2>Your own files</h2>
+    <ul>
+      <li><b>Videos and images</b> look best with the subject on a <b>pure black background</b>, because black is invisible in the reflection. Pick several files to make a playlist.</li>
+      <li><b>3D models (.glb)</b> are shown in their real colours and slowly spin. Tap "Model" for a wireframe look. In Blender: File → Export → glTF 2.0, format "glTF Binary".</li>
+      <li><b>Darken background</b> pushes a dark grey video background down to black.</li>
+    </ul>
+    <h2>Mirror</h2>
+    <p>The reflection flips the picture. Up–down is right for a tablet lying screen-up under the sheet. If text looks backwards, try the other settings.</p>
+    <h2>Tips</h2>
+    <ul>
+      <li>Dim the room and turn screen brightness to max.</li>
+      <li>Turn off Auto-Lock so the screen stays on.</li>
+      <li>On iPhone/iPad: Share → Add to Home Screen, then open it from there for full screen.</li>
+    </ul>
+    <p><button id="closehelp" class="primary">Got it</button></p>
+  </div>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="lib/GLTFLoader.js"></script>
+<script>
+(function () {
+  "use strict";
+  // Written for Safari 12 and up: no optional chaining, no ??, no modules.
+  var $ = function (id) { return document.getElementById(id); };
+  var stage = $("stage"), glCanvas = $("gl"), c2d = $("c2d"), vid = $("vid"), img = $("img");
+  var ctx = c2d.getContext("2d");
+  var T = 0;
+
+  // Built-in videos. Add more by editing videos/videos.json.
+  var LIBRARY = [];
+
+  var S = load({ mirror: "y", rotate: 0, size: 1, bright: 1, black: 1, text: "HELLO", modelStyle: "color", last: null });
+  function load(def) {
+    try { var s = JSON.parse(localStorage.getItem("holoViewer2") || "{}"); for (var k in def) if (!(k in s)) s[k] = def[k]; return s; }
+    catch (e) { return def; }
+  }
+  function save() { try { localStorage.setItem("holoViewer2", JSON.stringify(S)); } catch (e) {} }
+
+  // ---------- layout ----------
+  var MIRROR_LABEL = { y: "Mirror: up–down", x: "Mirror: sideways", none: "Mirror: off" };
+  function layout() {
+    var w = window.innerWidth, h = window.innerHeight, rot = S.rotate % 180 !== 0;
+    var sw = rot ? h : w, sh = rot ? w : h;
+    stage.style.width = sw + "px"; stage.style.height = sh + "px";
+    var sx = S.mirror === "x" ? -1 : 1, sy = S.mirror === "y" ? -1 : 1;
+    var t = "translate(-50%,-50%) rotate(" + S.rotate + "deg) scale(" + (sx * S.size) + "," + (sy * S.size) + ")";
+    stage.style.transform = t; stage.style.webkitTransform = t;
+    var f = "brightness(" + S.bright + ") contrast(" + S.black + ")";
+    stage.style.filter = f; stage.style.webkitFilter = f;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    c2d.width = Math.round(sw * dpr); c2d.height = Math.round(sh * dpr);
+    if (renderer) { renderer.setSize(sw, sh, false); camera.aspect = sw / sh; camera.position.z = 7 / Math.min(1, camera.aspect); camera.updateProjectionMatrix(); }
+    $("mirror").textContent = MIRROR_LABEL[S.mirror];
+    $("rotate").textContent = "Rotate " + S.rotate + "°";
+    $("size").value = S.size; $("bright").value = S.bright; $("black").value = S.black;
+  }
+  window.addEventListener("resize", layout);
+
+  // ---------- three.js for .glb models ----------
+  var renderer = null, scene, camera, root, mats = [], lastModel = null;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setClearColor(0x000000, 1);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100); camera.position.set(0, 0, 7);
+    root = new THREE.Group(); scene.add(root);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    var key = new THREE.DirectionalLight(0xffffff, 1.15); key.position.set(3, 4, 5); scene.add(key);
+    var rim = new THREE.DirectionalLight(0xdfe8ff, 0.6); rim.position.set(-4, 2, -3); scene.add(rim);
+  } catch (e) { renderer = null; }
+
+  function clearRoot() {
+    while (root.children.length) { var c = root.children.pop(); c.traverse(function (o) { if (o.geometry && o.userData.own) o.geometry.dispose(); }); }
+    mats = []; root.rotation.set(0.25, 0, 0);
+  }
+  function buildModel() {
+    if (!lastModel) return;
+    clearRoot();
+    var src = lastModel; src.updateMatrixWorld(true);
+    var box = new THREE.Box3().setFromObject(src), size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
+    var k = 3.4 / Math.max(size.x, size.y, size.z, 1e-6);
+    $("style").textContent = S.modelStyle === "color" ? "Model: real colours" : "Model: wireframe";
+    if (S.modelStyle === "color") {
+      var holder = new THREE.Group(), copy = src.clone(true);
+      copy.position.sub(center); holder.add(copy); holder.scale.setScalar(k); root.add(holder); return;
+    }
+    src.traverse(function (o) {
+      if (!o.isMesh) return;
+      var g = o.geometry.clone(); g.applyMatrix4(o.matrixWorld); g.translate(-center.x, -center.y, -center.z); g.scale(k, k, k);
+      var e = new THREE.EdgesGeometry(g, 25);
+      var lm = new THREE.LineBasicMaterial({ color: 0xf2f2f0, transparent: true, opacity: 0.85 });
+      var ls = new THREE.LineSegments(e.attributes.position.count < g.attributes.position.count * 0.3 ? new THREE.WireframeGeometry(g) : e, lm);
+      ls.userData.own = true; root.add(ls);
+    });
+  }
+
+  // ---------- extras (2D) ----------
+  var draw2d = null;
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function extraClock() {
+    draw2d = function () {
+      var W = c2d.width, H = c2d.height, m = Math.min(W, H), d = new Date();
+      ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#f2f2f0"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "100 " + Math.round(m * 0.26) + "px -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif";
+      ctx.fillText(pad(d.getHours()) + ":" + pad(d.getMinutes()), W / 2, H / 2 - m * 0.03);
+      ctx.font = "400 " + Math.round(m * 0.034) + "px -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif";
+      ctx.fillStyle = "rgba(242,242,240,.6)";
+      ctx.fillText(d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }), W / 2, H / 2 + m * 0.15);
+      var s = (d.getSeconds() + d.getMilliseconds() / 1000) / 60;
+      ctx.fillStyle = "rgba(242,242,240,.25)"; ctx.fillRect(W / 2 - m * 0.3, H / 2 + m * 0.23, m * 0.6, Math.max(1, m * 0.003));
+      ctx.fillStyle = "#f2f2f0"; ctx.fillRect(W / 2 - m * 0.3, H / 2 + m * 0.23, m * 0.6 * s, Math.max(1, m * 0.003));
+    };
+  }
+  function extraText() {
+    draw2d = function () {
+      var W = c2d.width, H = c2d.height, m = Math.min(W, H), txt = S.text || " ";
+      ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#f2f2f0"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      var fs = m * 0.2; ctx.font = "200 " + fs + "px -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif";
+      var tw = ctx.measureText(txt).width; if (tw > W * 0.88) { fs *= W * 0.88 / tw; ctx.font = "200 " + fs + "px -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif"; }
+      ctx.globalAlpha = 0.85 + 0.15 * Math.sin(T * 1.6); ctx.fillText(txt, W / 2, H / 2); ctx.globalAlpha = 1;
+    };
+  }
+
+  // ---------- playlist ----------
+  var list = [], idx = 0, objectUrls = [], current = "", imgTimer = 0, paused = false;
+  function kindOf(name, type) {
+    name = (name || "").toLowerCase(); type = type || "";
+    if (type.indexOf("video/") === 0 || /\.(mp4|mov|m4v|webm)$/.test(name)) return "video";
+    if (type.indexOf("image/") === 0 || /\.(png|jpe?g|gif|webp)$/.test(name)) return "image";
+    if (/\.glb$/.test(name) || type === "model/gltf-binary") return "model";
+    return "";
+  }
+  function setList(items, start) { list = items; idx = start || 0; playCurrent(); }
+  function next(step) { if (!list.length) return; idx = (idx + (step || 1) + list.length) % list.length; playCurrent(); }
+
+  function showLayer(which) {
+    current = which;
+    ["gl", "c2d", "vid", "img"].forEach(function (id) { $(id).className = id === which ? "on" : ""; });
+    if (which !== "vid") { try { vid.pause(); } catch (e) {} }
+    if (which !== "c2d") draw2d = null;
+  }
+  function playCurrent() {
+    var it = list[idx]; if (!it) return;
+    clearTimeout(imgTimer);
+    stage.className = "fade";
+    setTimeout(function () {
+      $("style").hidden = it.kind !== "model";
+      $("text").hidden = !(it.kind === "extra" && it.extra === "text");
+      $("now").textContent = it.title || "";
+      if (it.kind === "video") {
+        vid.loop = list.length === 1; vid.muted = !soundOn; vid.src = it.url;
+        showLayer("vid"); var p = vid.play(); if (p && p.catch) p.catch(function () {});
+      } else if (it.kind === "image") {
+        img.src = it.url; showLayer("img");
+        if (list.length > 1) imgTimer = setTimeout(function () { next(1); }, 10000);
+      } else if (it.kind === "model") {
+        if (!renderer) { toast("3D models need WebGL, which this browser doesn't offer."); return; }
+        new THREE.GLTFLoader().load(it.url, function (g) { lastModel = g.scene; buildModel(); showLayer("gl"); },
+          undefined, function () { toast("Could not read that 3D file. Use a .glb (glTF Binary)."); });
+      } else if (it.kind === "extra") {
+        if (it.extra === "clock") extraClock(); else extraText();
+        showLayer("c2d");
+      }
+      if (it.lib) { S.last = it.url; save(); }
+      paused = false; $("play").textContent = "Pause";
+      stage.className = "";
+    }, 300);
+  }
+  vid.addEventListener("ended", function () { if (list.length > 1) next(1); });
+
+  function openFiles(files) {
+    objectUrls.forEach(function (u) { URL.revokeObjectURL(u); }); objectUrls = [];
+    var items = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i], k = kindOf(f.name, f.type);
+      if (!k) continue;
+      var u = URL.createObjectURL(f); objectUrls.push(u);
+      items.push({ kind: k, url: u, title: f.name });
+    }
+    if (!items.length) { toast("Use videos (mp4/mov), images (png/jpg/gif) or a 3D model (.glb)."); return; }
+    closeGallery(); setList(items, 0);
+  }
+
+  var toastTimer = 0;
+  function toast(msg) { var h = $("hint"); h.textContent = msg; h.className = ""; h.style.color = "#e8c9b0"; clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { h.style.color = ""; h.textContent = "Tap anywhere for controls"; h.className = "hidden"; }, 4500); }
+
+  // ---------- gallery ----------
+  function buildGallery() {
+    var tiles = $("tiles"); tiles.innerHTML = "";
+    if (!LIBRARY.length) { tiles.innerHTML = '<p class="sub">No built-in videos found.</p>'; return; }
+    LIBRARY.forEach(function (v, i) {
+      var t = document.createElement("div"); t.className = "tile"; t.setAttribute("role", "button"); t.tabIndex = 0;
+      if (v.poster) { var im = document.createElement("img"); im.src = v.poster; im.alt = ""; t.appendChild(im); }
+      var s = document.createElement("span"); s.textContent = v.title; t.appendChild(s);
+      t.addEventListener("click", function () {
+        closeGallery();
+        setList(LIBRARY.map(function (x) { return { kind: "video", url: x.file, title: x.title, lib: true }; }), i);
+      });
+      tiles.appendChild(t);
+    });
+  }
+  function openGallery() { $("gallery").className = "show"; }
+  function closeGallery() { $("gallery").className = ""; }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-extra]"), function (el) {
+    el.addEventListener("click", function () {
+      var e = el.getAttribute("data-extra"); closeGallery();
+      setList([{ kind: "extra", extra: e, title: e === "clock" ? "Clock" : "Your text" }], 0);
+    });
+  });
+
+  // ---------- controls ----------
+  var soundOn = false;
+  $("openGallery").addEventListener("click", openGallery);
+  $("closeGallery").addEventListener("click", closeGallery);
+  $("file").addEventListener("change", function (e) { openFiles(e.target.files); e.target.value = ""; });
+  $("prev").addEventListener("click", function () { next(-1); });
+  $("next").addEventListener("click", function () { next(1); });
+  $("play").addEventListener("click", function () {
+    paused = !paused; this.textContent = paused ? "Play" : "Pause";
+    if (current === "vid") { if (paused) vid.pause(); else { var p = vid.play(); if (p && p.catch) p.catch(function () {}); } }
+  });
+  $("text").addEventListener("input", function (e) { S.text = e.target.value; save(); });
+  $("style").addEventListener("click", function () { S.modelStyle = S.modelStyle === "color" ? "wire" : "color"; save(); buildModel(); });
+  $("mirror").addEventListener("click", function () { S.mirror = S.mirror === "y" ? "x" : S.mirror === "x" ? "none" : "y"; save(); layout(); });
+  $("rotate").addEventListener("click", function () { S.rotate = (S.rotate + 90) % 360; save(); layout(); });
+  $("sound").addEventListener("click", function () { soundOn = !soundOn; vid.muted = !soundOn; this.textContent = soundOn ? "Sound on" : "Sound off"; this.className = soundOn ? "on" : ""; });
+  ["size", "bright", "black"].forEach(function (id) { $(id).addEventListener("input", function (e) { S[id] = parseFloat(e.target.value); save(); layout(); }); });
+  $("full").addEventListener("click", function () {
+    var d = document.documentElement, r = d.requestFullscreen || d.webkitRequestFullscreen;
+    if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+    else if (r) { var p = r.call(d); if (p && p.catch) p.catch(function () { toast("Fullscreen isn't available here. On iPhone/iPad use Share → Add to Home Screen."); }); }
+    else toast("Fullscreen isn't available here. On iPhone/iPad use Share → Add to Home Screen.");
+  });
+  $("helpbtn").addEventListener("click", function () { $("help").className = "show"; });
+  $("closehelp").addEventListener("click", function () { $("help").className = ""; });
+
+  var ui = $("ui"), hint = $("hint"), hideTimer = 0;
+  function showUI() { ui.className = ""; hint.className = "hidden"; clearTimeout(hideTimer); hideTimer = setTimeout(hideUI, 5000); }
+  function hideUI() { ui.className = "hidden"; }
+  $("hide").addEventListener("click", function (e) { e.stopPropagation(); hideUI(); hint.className = ""; setTimeout(function () { hint.className = "hidden"; }, 2500); });
+  ui.addEventListener("touchstart", showUI, { passive: true }); ui.addEventListener("mousedown", showUI);
+  document.body.addEventListener("click", function (e) {
+    if (ui.contains(e.target) || $("help").contains(e.target) || $("gallery").contains(e.target)) return;
+    if (ui.className) showUI(); else hideUI();
+  });
+
+  var drop = $("drop");
+  window.addEventListener("dragover", function (e) { e.preventDefault(); drop.className = "show"; });
+  window.addEventListener("dragleave", function (e) { if (e.target === drop) drop.className = ""; });
+  window.addEventListener("drop", function (e) { e.preventDefault(); drop.className = ""; if (e.dataTransfer.files.length) openFiles(e.dataTransfer.files); });
+
+  function wake() { if (navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request("screen").catch(function () {}); }
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) wake(); });
+
+  // ---------- loop ----------
+  var last = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    var dt = Math.min((now - last) / 1000, 0.05); last = now; T += dt;
+    if (current === "gl" && renderer) { if (!paused) root.rotation.y += dt * 0.35; renderer.render(scene, camera); }
+    else if (current === "c2d" && draw2d) draw2d();
+  }
+
+  // ---------- start ----------
+  layout(); showUI(); wake(); requestAnimationFrame(frame);
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "videos/videos.json", true);
+  xhr.onload = function () {
+    try { LIBRARY = JSON.parse(xhr.responseText); } catch (e) { LIBRARY = []; }
+    buildGallery();
+    if (LIBRARY.length) {
+      var start = 0;
+      for (var i = 0; i < LIBRARY.length; i++) if (LIBRARY[i].file === S.last) start = i;
+      setList(LIBRARY.map(function (x) { return { kind: "video", url: x.file, title: x.title, lib: true }; }), start);
+    } else openGallery();
+  };
+  xhr.onerror = function () { buildGallery(); openGallery(); };
+  xhr.send();
+})();
+</script>
+</body>
+</html>
